@@ -1,6 +1,6 @@
 {
   "name": "palrconclient",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Palworld RCON Client",
   "main": "index.js",
   "scripts": {
