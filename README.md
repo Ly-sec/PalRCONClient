@@ -6,6 +6,9 @@ It is written in NodeJS and uses async functions.
 Oh, it also supports using multiple rcon connections at once, best used if you have multiple Palworld servers that you need to manage at the same time.
 
 # Usage
+
+`npm i palrconclient`
+
 ```js
 const { PalRCONClient } = require('palrconclient')
 
