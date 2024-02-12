@@ -223,7 +223,7 @@ class PalRCONClient {
     }
   }
 
-  static async Shutdown(target, time = '0', message = '') {
+  static async Shutdown(target, time = '1', message = '') {
     if (target === 'all') {
       const savePromises = PalRCONClient.connections.map((instance) => PalRCONClient.save(instance));
       return Promise.all(savePromises);
