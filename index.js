@@ -25,7 +25,7 @@ class PalRCONClient {
 
   connect() {
     this.socket = net.connect({ port: this.serverPort, host: this.serverIP }, () => {
-      console.log(`Connected to Palworld server at ${this.serverIP}:${this.serverPort}`);
+      //console.log(`Connected to Palworld server at ${this.serverIP}:${this.serverPort}`);
 
       const size = 14 + this.password.length;
       const handshakePacket = Buffer.alloc(size);
@@ -86,22 +86,34 @@ class PalRCONClient {
   }
 
   handleData(data) {
-    const size = data.readInt32LE(0);
-    const requestId = data.readInt32LE(4);
-    const responseType = data.readInt32LE(8);
-    const payloadBuffer = data.slice(12);
-    const printablePayload = payloadBuffer.toString('utf-8').replace(/[^\x20-\x7E\u{4E00}-\u{9FFF}\u{3040}-\u{309F}\u{30A0}-\u{30FF}\u{AC00}-\u{D7AF}\u{0400}-\u{04FF}]/ug, '');
-
-    if (responseType === 2) {
-      this.authenticated = true;
-      console.log(`Authenticated to ${this.connectionId}`);
-      this.sendQueuedCommands();
+    const failedLoginBuffer = Buffer.from([0x0a, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00]);
+    
+    if (Buffer.compare(data, failedLoginBuffer) === 0) {
+      // Failed login
+      console.log(`Login failed for instance ${this.connectionId}`);
+      this.disconnect();  // Disconnect if login failed
     } else {
-      if (this.onData && typeof this.onData === 'function') {
-        this.onData({ size, requestId, responseType, response: printablePayload });
+      // Process other responses
+      const size = data.readInt32LE(0);
+      const requestId = data.readInt32LE(4);
+      const responseType = data.readInt32LE(8);
+      const payloadBuffer = data.slice(12);
+      const printablePayload = payloadBuffer.toString('utf-8').replace(/[^\x20-\x7E\u{4E00}-\u{9FFF}\u{3040}-\u{309F}\u{30A0}-\u{30FF}\u{AC00}-\u{D7AF}\u{0400}-\u{04FF}]/ug, '');
+  
+      if (responseType === 2 && requestId === 0) {
+        // Successful login
+        this.authenticated = true;
+        console.log(`Login successful for instance ${this.connectionId}`);
+        this.sendQueuedCommands();
+      } else {
+        // Process other responses
+        if (this.onData && typeof this.onData === 'function') {
+          this.onData({ size, requestId, responseType, response: printablePayload });
+        }
       }
     }
-  }
+  }  
+    
 
   async sendCommand(command) {
     return new Promise((resolve, reject) => {
@@ -181,10 +193,11 @@ class PalRCONClient {
 
   static async Send(target, command) {
     if (target === 'all') {
-      const sendPromises = PalRCONClient.connections.map((instance) => PalRCONClient.send(instance, command));
+      const sendPromises = PalRCONClient.connections.map((instance) => PalRCONClient.Send(instance, command));
       return Promise.all(sendPromises);
     } else {
-      const instance = PalRCONClient.connections.find((client) => client.connectionId === target);
+      const instance = target instanceof PalRCONClient ? target : PalRCONClient.connections.find((client) => client.connectionId === target);
+  
       if (instance) {
         if (!instance.authenticated) {
           instance.connect();
@@ -198,7 +211,7 @@ class PalRCONClient {
 
   static async Broadcast(target, message) {
     if (target === 'all') {
-      const broadcastPromises = PalRCONClient.connections.map((instance) => PalRCONClient.broadcast(instance, command));
+      const broadcastPromises = PalRCONClient.connections.map((instance) => PalRCONClient.Broadcast(instance, command));
       return Promise.all(broadcastPromises);
     } else {
       const instance = target;
@@ -212,7 +225,7 @@ class PalRCONClient {
 
   static async Save(target) {
     if (target === 'all') {
-      const savePromises = PalRCONClient.connections.map((instance) => PalRCONClient.save(instance));
+      const savePromises = PalRCONClient.connections.map((instance) => PalRCONClient.Save(instance));
       return Promise.all(savePromises);
     } else {
       const instance = target;
@@ -225,8 +238,8 @@ class PalRCONClient {
 
   static async Shutdown(target, time = '1', message = '') {
     if (target === 'all') {
-      const savePromises = PalRCONClient.connections.map((instance) => PalRCONClient.save(instance));
-      return Promise.all(savePromises);
+      const shutdownPromise = PalRCONClient.connections.map((instance) => PalRCONClient.Shutdown(instance));
+      return Promise.all(shutdownPromise);
     } else {
       const instance = target;
       if (!instance.authenticated) {
@@ -239,8 +252,8 @@ class PalRCONClient {
 
   static async ShowPlayers(target) {
     if (target === 'all') {
-      const savePromises = PalRCONClient.connections.map((instance) => PalRCONClient.save(instance));
-      return Promise.all(savePromises);
+      const showPlayersPromise = PalRCONClient.connections.map((instance) => PalRCONClient.ShowPlayers(instance));
+      return Promise.all(showPlayersPromise);
     } else {
       const instance = target;
       if (!instance.authenticated) {
@@ -252,8 +265,8 @@ class PalRCONClient {
 
   static async Kick(target, steamId) {
     if (target === 'all') {
-      const savePromises = PalRCONClient.connections.map((instance) => PalRCONClient.save(instance));
-      return Promise.all(savePromises);
+      const kickPromise = PalRCONClient.connections.map((instance) => PalRCONClient.Kick(instance));
+      return Promise.all(kickPromise);
     } else {
       const instance = target;
       if (!instance.authenticated) {
@@ -265,8 +278,8 @@ class PalRCONClient {
 
   static async Ban(target, steamId) {
     if (target === 'all') {
-      const savePromises = PalRCONClient.connections.map((instance) => PalRCONClient.save(instance));
-      return Promise.all(savePromises);
+      const banPromise = PalRCONClient.connections.map((instance) => PalRCONClient.Ban(instance));
+      return Promise.all(banPromise);
     } else {
       const instance = target;
       if (!instance.authenticated) {
