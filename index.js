@@ -259,7 +259,7 @@ class PalRCONClient {
       if (!instance.authenticated) {
         instance.connect();
       }
-      return instance.sendCommand(`Kick ${steamId}`);
+      return instance.sendCommand(`KickPlayer ${steamId}`);
     }
   }
 
@@ -272,7 +272,7 @@ class PalRCONClient {
       if (!instance.authenticated) {
         instance.connect();
       }
-      return instance.sendCommand(`Ban ${steamId}`);
+      return instance.sendCommand(`BanPlayer ${steamId}`);
     }
   }
 }
