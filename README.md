@@ -28,7 +28,7 @@ To install this package, please use `npm install palrconclient`.
 ### Example Code
 ```js
 // Import the PalworldRCONClient class
-const { PalRCONClient } = require('./index');
+const { PalRCONClient } = require('palrconclient');
 
 // Create an instance of PalworldRCONClient
 const rconClient1 = new PalRCONClient('IP', 25575, 'PASSWORD');
