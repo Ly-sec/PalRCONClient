@@ -1,303 +1,197 @@
 const net = require('net');
+const { Buffer } = require('buffer');
+const crypto = require('crypto');
 
 class PalRCONClient {
-
-  static connections = [];
-
-  constructor(serverIP, serverPort, password, options = {}) {
-    const { onEnd, onError, onData } = options;
-
-    this.serverIP = serverIP;
-    this.serverPort = serverPort;
-    this.password = password;
-    this.onEnd = onEnd;
-    this.onError = onError;
-    this.onData = onData;
-
-    this.socket = null;
-    this.authenticated = false;
-    this.commandQueue = [];
-    this.connectionId = `${serverIP}:${serverPort}`;
-    this.onEndLogged = false; // New flag to track if onEnd event has been logged
-
-    PalRCONClient.connections.push(this);
-  }
-
-  connect() {
-    this.socket = net.connect({ port: this.serverPort, host: this.serverIP }, () => {
-      //console.log(`Connected to Palworld server at ${this.serverIP}:${this.serverPort}`);
-
-      const size = 14 + this.password.length;
-      const handshakePacket = Buffer.alloc(size);
-      handshakePacket.writeInt32LE(size, 0);
-      handshakePacket.writeInt32LE(0, 4);
-      handshakePacket.writeInt32LE(3, 8);
-      handshakePacket.write(this.password, 12, 'ascii');
-
-      // Check if the socket is still open before writing
-      if (this.socket && !this.socket.destroyed) {
-        this.socket.write(handshakePacket);
-      } else {
-        console.error('Attempted to write to a closed socket during connection.');
-      }
-    });
-
-    this.socket.on('data', (data) => {
-      this.handleData(data);
-    });
-
-    this.socket.on('end', () => {
-      console.log(`Connection ${this.connectionId} closed.`);
-      if (!this.onEndLogged && this.onEnd && typeof this.onEnd === 'function') {
-        try {
-          this.onEnd();
-          this.onEndLogged = true; // Set the flag to true after logging onEnd
-        } catch (err) {
-          console.error('Error in onEnd handler:', err);
-        }
-      }
-    });
-
-    this.socket.on('error', (err) => {
-      console.error(`Socket error in connection ${this.connectionId}:`, err.message);
-      if (this.onError && typeof this.onError === 'function') {
-        try {
-          this.onError(err);
-        } catch (err) {
-          console.error('Error in onError handler:', err);
-        }
-      }
-    });
-
-    this.socket.on('close', (hadError) => {
-      if (hadError) {
-        console.error(`Connection ${this.connectionId} closed due to an error.`);
-      }
-
-      if (this.onEnd && typeof this.onEnd === 'function') {
-        try {
-          this.onEndLogged = false; // Reset the flag for the next connection
-          this.onEnd();
-        } catch (err) {
-          console.error('Error in onEnd handler:', err);
-        }
-      }
-    });
-  }
-
-  handleData(data) {
-    const failedLoginBuffer = Buffer.from([0x0a, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00]);
-    
-    if (Buffer.compare(data, failedLoginBuffer) === 0) {
-      // Failed login
-      console.log(`Login failed for instance ${this.connectionId}`);
-      this.disconnect();  // Disconnect if login failed
-    } else {
-      // Process other responses
-      const size = data.readInt32LE(0);
-      const requestId = data.readInt32LE(4);
-      const responseType = data.readInt32LE(8);
-      const payloadBuffer = data.slice(12);
-      const printablePayload = payloadBuffer.toString('utf-8').replace(/[^\x20-\x7E\u{4E00}-\u{9FFF}\u{3040}-\u{309F}\u{30A0}-\u{30FF}\u{AC00}-\u{D7AF}\u{0400}-\u{04FF}]/ug, '');
-  
-      if (responseType === 2 && requestId === 0) {
-        // Successful login
-        this.authenticated = true;
-        console.log(`Login successful for instance ${this.connectionId}`);
-        this.sendQueuedCommands();
-      } else {
-        // Process other responses
-        if (this.onData && typeof this.onData === 'function') {
-          this.onData({ size, requestId, responseType, response: printablePayload });
-        }
-      }
+    constructor(host, port, password) {
+        this.options = {
+            host: host,
+            port: port,
+            password: password,
+        };
+        this.connected = false;
+        this.authed = false;
+        this.socket = new net.Socket();
+        this.id = crypto.randomInt(2147483647);
     }
-  }  
-    
 
-  async sendCommand(command) {
-    return new Promise((resolve, reject) => {
-      // Check if the socket is connected and authenticated
-      if (this.socket && !this.socket.destroyed && this.authenticated) {
-        const commandBuffer = Buffer.from(command, 'utf-8');
-        const size = 14 + commandBuffer.length;
+    async connect() {
+        return new Promise((resolve, reject) => {
+            this.socket = net.createConnection(this.options.port, this.options.host);
+            this.socket.once('error', () => reject(new Error('Connection error')));
+            this.socket.once('connect', () => {
+                this.connected = true;
+                this.id = crypto.randomInt(2147483647);
+                this.sendRawCommand(this.options.password, 3)
+                    .then((response) => {
+                        if (Buffer.isBuffer(response) && response.length >= 4) {
+                            const receivedId = response.readUInt32LE(4);
+                            if (receivedId === this.id) {
+                                this.authed = true;
+                                resolve(null);
+                            } else {
+                                this.disconnect();
+                                reject(new Error('Authentication error'));
+                            }
+                        } else {
+                            this.disconnect();
+                            reject(new Error('Invalid response format'));
+                        }
+                    })
+                    .catch((error) => reject(error));
+            });
 
-        const commandPacket = Buffer.alloc(size);
-        commandPacket.writeInt32LE(size, 0);
-        commandPacket.writeInt32LE(1, 4);
-        commandPacket.writeInt32LE(2, 8);
-        commandBuffer.copy(commandPacket, 12);
-
-        commandPacket.writeInt16LE(0, size - 2);
-
-        // Send the command
-        this.socket.write(commandPacket, (err) => {
-          if (err) {
-            reject(err);
-          } else {
-            resolve();
-          }
+            this.socket.on('data', (data) => {
+                // Handle incoming data if needed
+            });
         });
-      } else if (!this.socket || this.socket.destroyed) {
-        // If the socket is not connected or destroyed, queue the command and attempt to reconnect
-        this.queueCommand(command);
-        this.reconnect();
-        resolve(); // Resolve immediately for asynchronous compatibility
-      } else {
-        // If the socket is still connecting, queue the command and wait for the 'connect' event
-        this.queueCommand(command);
-        this.socket.once('connect', () => {
-          // Ensure the socket is authenticated before sending any queued commands
-          if (this.authenticated) {
-            this.sendQueuedCommands();
-          }
-          resolve(); // Resolve after connection is established
+    }
+
+    async sendRawCommand(data, requestId) {
+        return new Promise((resolve, reject) => {
+            if (!this.connected) reject(new Error(`Authentication Error: ${this.options.host}:${this.options.port}`));
+
+            const len = Buffer.byteLength(data, 'ascii');
+            const buffer = Buffer.alloc(len + 14);
+            buffer.writeInt32LE(len + 4, 0);
+            buffer.writeInt32LE(this.id, 4);
+            buffer.writeInt32LE(requestId, 8);
+            buffer.write(data, 12, 'ascii');
+            buffer.writeInt16LE(0, 12 + len);
+            this.socket.write(buffer);
+
+            let responseData = Buffer.alloc(0);
+
+            const onData = (dataChunk) => {
+                responseData = Buffer.concat([responseData, dataChunk]);
+                const responseLength = responseData.readUInt32LE(0);
+
+                if (responseLength > 0 && responseData.length >= responseLength) {
+                    this.socket.removeListener('data', onData);
+                    resolve(responseData);
+                }
+            };
+
+            this.socket.on('data', onData);
+
+            this.socket.once('error', (error) => {
+                this.socket.removeListener('data', onData);
+                reject(error);
+            });
         });
-      }
-    });
-  }
-
-  reconnect() {
-    // Check if a reconnection attempt is already in progress
-    if (!this.reconnecting) {
-      this.reconnecting = true;
-
-      // Disconnect the current socket
-      this.disconnect();
-
-      // Attempt to reconnect after 5 second delay
-      setTimeout(() => {
-        this.connect();
-        this.reconnecting = false;
-      }, 5000);
     }
-  }
 
-  queueCommand(command) {
-    this.commandQueue.push(command);
-  }
-
-  sendQueuedCommands() {
-    while (this.commandQueue.length > 0) {
-      this.sendCommand(this.commandQueue.shift());
-    }
-  }
-
-  disconnect() {
-    console.log(`Disconnecting ${this.connectionId}`);
-    if (this.socket) {
-      this.socket.end();
-      this.socket = null;
-    }
-  }
-
-  static async Send(target, command) {
-    if (target === 'all') {
-      const sendPromises = PalRCONClient.connections.map((instance) => PalRCONClient.Send(instance, command));
-      return Promise.all(sendPromises);
-    } else {
-      const instance = target instanceof PalRCONClient ? target : PalRCONClient.connections.find((client) => client.connectionId === target);
-  
-      if (instance) {
-        if (!instance.authenticated) {
-          instance.connect();
+    static async Send(clientInstance, command) {
+        try {
+            await clientInstance.connect();
+            const response = await clientInstance.sendRawCommand(command, 2);
+            return response.subarray(12).toString('utf-8').replace(/\x00|\u0000/g, '');
+        } catch (error) {
+            throw new Error(` Instance ${clientInstance.options.host}:${clientInstance.options.port}: ${error.message}`);
+        } finally {
+            clientInstance.disconnect();
         }
-        return instance.sendCommand(command);
-      } else {
-        throw new Error(`Instance with identifier '${target}' not found.`);
-      }
     }
-  }
 
-  static async Broadcast(target, message) {
-    if (target === 'all') {
-      const broadcastPromises = PalRCONClient.connections.map((instance) => PalRCONClient.Broadcast(instance, command));
-      return Promise.all(broadcastPromises);
-    } else {
-      const instance = target;
-      if (!instance.authenticated) {
-        instance.connect();
-      }
-      const broadcastMessage = `${message.replace(/ /g, "_")}`;
-      return instance.sendCommand(`Broadcast ${broadcastMessage}`);
+    static async ShowPlayers(clientInstance) {
+        try {
+            await clientInstance.connect();
+            const response = await clientInstance.sendRawCommand('ShowPlayers', 2);
+            return response.subarray(12).toString('utf-8').replace(/\x00|\u0000/g, '');
+        } catch (error) {
+            throw new Error(`Error for client at ${clientInstance.options.host}:${clientInstance.options.port}: ${error.message}`);
+        } finally {
+            clientInstance.disconnect();
+        }
     }
-  }
 
-  static async Save(target) {
-    if (target === 'all') {
-      const savePromises = PalRCONClient.connections.map((instance) => PalRCONClient.Save(instance));
-      return Promise.all(savePromises);
-    } else {
-      const instance = target;
-      if (!instance.authenticated) {
-        instance.connect();
-      }
-      return instance.sendCommand("save");
+    static async Broadcast(clientInstance, message) {
+        try {
+            await clientInstance.connect();
+            let editedMessage = message.replace(/ /g, "_");
+            const response = await clientInstance.sendRawCommand(`Broadcast ${editedMessage}`, 2);
+            return response.subarray(12).toString('utf-8').replace(/\x00|\u0000/g, '');
+        } catch (error) {
+            throw new Error(`Error for client at ${clientInstance.options.host}:${clientInstance.options.port}: ${error.message}`);
+        } finally {
+            clientInstance.disconnect();
+        }
     }
-  }
 
-  static async Shutdown(target, time = '1', message = '') {
-    if (target === 'all') {
-      const shutdownPromise = PalRCONClient.connections.map((instance) => PalRCONClient.Shutdown(instance));
-      return Promise.all(shutdownPromise);
-    } else {
-      const instance = target;
-      if (!instance.authenticated) {
-        instance.connect();
-      }
-      const shutdownMessage = `${message.replace(/ /g, "_")}`;
-      return instance.sendCommand(`Shutdown ${time} ${shutdownMessage}`);
+    static async Save(clientInstance) {
+        try {
+            await clientInstance.connect();
+            const response = await clientInstance.sendRawCommand('Save', 2);
+            return response.subarray(12).toString('utf-8').replace(/\x00|\u0000/g, '');
+        } catch (error) {
+            throw new Error(`Error for client at ${clientInstance.options.host}:${clientInstance.options.port}: ${error.message}`);
+        } finally {
+            clientInstance.disconnect();
+        }
     }
-  }
 
-  static async ShowPlayers(target) {
-    if (target === 'all') {
-      const showPlayersPromise = PalRCONClient.connections.map((instance) => PalRCONClient.ShowPlayers(instance));
-      return Promise.all(showPlayersPromise);
-    } else {
-      const instance = target;
-      if (!instance.authenticated) {
-        instance.connect();
-      }
-      return instance.sendCommand("ShowPlayers");
+    static async ShutDown(clientInstance, time, message) {
+        try {
+            await clientInstance.connect();
+            let editedMessage = message.replace(/ /g, "_");
+            if (!(/^\d+$/.test(time))) {
+                throw new Error('Invalid time format. Time must contain only numbers.');
+            }
+            const response = await clientInstance.sendRawCommand(`ShutDown ${time} ${editedMessage}`, 2);
+            return response.subarray(12).toString('utf-8').replace(/\x00|\u0000/g, '');
+        } catch (error) {
+            throw new Error(`Error for client at ${clientInstance.options.host}:${clientInstance.options.port}: ${error.message}`);
+        } finally {
+            clientInstance.disconnect();
+        }
     }
-  }
 
-  static async Kick(target, steamId) {
-    if (target === 'all') {
-      const kickPromise = PalRCONClient.connections.map((instance) => PalRCONClient.Kick(instance));
-      return Promise.all(kickPromise);
-    } else {
-      const instance = target;
-      if (!instance.authenticated) {
-        instance.connect();
-      }
-      return instance.sendCommand(`KickPlayer ${steamId}`);
+    static async Kick(clientInstance, steamId) {
+        try {
+            await clientInstance.connect();
+            if (!(/^\d+$/.test(steamId))) {
+                throw new Error('Invalid steamId. steamId must contain only numbers.');
+            }
+            const response = await clientInstance.sendRawCommand(`KickPlayer ${steamId}`, 2);
+            return response.subarray(12).toString('utf-8').replace(/\x00|\u0000/g, '');
+        } catch (error) {
+            throw new Error(`Error for client at ${clientInstance.options.host}:${clientInstance.options.port}: ${error.message}`);
+        } finally {
+            clientInstance.disconnect();
+        }
     }
-  }
 
-  static async Ban(target, steamId) {
-    if (target === 'all') {
-      const banPromise = PalRCONClient.connections.map((instance) => PalRCONClient.Ban(instance));
-      return Promise.all(banPromise);
-    } else {
-      const instance = target;
-      if (!instance.authenticated) {
-        instance.connect();
-      }
-      return instance.sendCommand(`BanPlayer ${steamId}`);
+    static async Ban(clientInstance, steamId) {
+        try {
+            await clientInstance.connect();
+            if (!(/^\d+$/.test(steamId))) {
+                throw new Error('Invalid steamId. steamId must contain only numbers.');
+            }
+            const response = await clientInstance.sendRawCommand(`BanPlayer ${steamId}`, 2);
+            return response.subarray(12).toString('utf-8').replace(/\x00|\u0000/g, '');
+        } catch (error) {
+            throw new Error(`Error for client at ${clientInstance.options.host}:${clientInstance.options.port}: ${error.message}`);
+        } finally {
+            clientInstance.disconnect();
+        }
     }
-  }
+
+    static async checkConnection(clientInstance) {
+        try {
+            await clientInstance.connect();
+            return true;
+        } catch (error) {
+            return false;
+        } finally {
+            clientInstance.disconnect();
+        }
+    }
+
+    disconnect() {
+        this.connected = false;
+        this.authed = false;
+        this.socket.end();
+    }
 }
 
-PalRCONClient.connections = [];
-
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  });
-  
-  process.on('uncaughtException', (err) => {
-    console.error('Uncaught Exception:', err);
-  });
-
-module.exports = PalRCONClient;
+module.exports = { PalRCONClient };

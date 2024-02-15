@@ -1,40 +1,85 @@
-This is a simple to use RCON client specifically made for the game Palworld.
-It is written in NodeJS and uses async functions.
 
-`palrconclient` is quite early in it's developement. Currently it features most rcon commands that Palworld has to offer. Oh did I mention that it also has a command queue? Makes your life much easier when you intend to send multiple commands at once.
+# PalRCONClient
+**Your soon to be favorite RCON Client for Palworld!**
 
-Oh, it also supports using multiple rcon connections at once, best used if you have multiple Palworld servers that you need to manage at the same time.
+This is a very early version of my own RCON client for Palworld.
 
-# Usage
+You can see the features down below.
 
-`npm i palrconclient`
+It is written in NodeJS, using `net`, `buffer` and `crypto`.
 
+
+## Features
+
+| Features                          | Implemented|
+| ---------------------------------| :--------:|
+| Multi Connection Support          |         ✔️|
+| Custom Functions for Commands     |         ✔️|
+| Solid Error Handling              |         ✔️|
+| More coming soon                  |           |
+
+
+
+## Usage
+
+### Installation
+To install this package, please use `npm install palrconclient`.
+
+### Example Code
 ```js
-const { PalRCONClient } = require('palrconclient')
+// Import the PalworldRCONClient class
+const { PalRCONClient } = require('./index');
 
-const rconClient1 = new PalRCONClient('IP', 25575, 'PASSWORD', {
-    onData: (data) => {
-        console.log('Connection 1 data:\n', data.response)
-    },
-    onEnd: () => {
-        console.log('Connection 1 closed.');
-    },
-    onError: (err) => {
-        console.error('Connection 1 error:', err)
-    },
-});
+// Create an instance of PalworldRCONClient
+const rconClient1 = new PalRCONClient('IP', 25575, 'PASSWORD');
+// You can create as many instances as you want / need!
 
-// Either define which client should be used or use 'all' to send it to all clients.
-/**
-PalRCONClient.Send(rconClient1, "RCON COMMAND") //Run commands that are not specified (or implemented yet)
-PalRCONClient.Broadcast(rconClient1, "Random broadcast text") //Automatically converts spaces to "_"
-PalRCONClient.Save(rconClient1) // Saves the server
-PalRCONClient.Shutdown(rconClient1, "20", "Shutdown Message") // Shuts the server down after X seconds with message
-PalRCONClient.ShowPlayers(rconClient1) // Displays the players playing right now
-PalRCONClient.Kick(rconClient1, "SteamId") // Kicks player (steamId)
-PalRCONClient.Ban(rconClient1, "SteamId") // Bans player (steamId)
-*/
+// Check if the credentials are correct
+PalRCONClient.checkConnection(rconClient1)
+  .then((isValid) => {
+    if (isValid) {
+        // Use the "/ShowPlayers" command
+        PalRCONClient.ShowPlayers(rconClient1)
+        // Log the response
+        .then((response) => { console.log(response) })
+        .catch((error) => console.error('Error:', error.message))
+    } else {
+      console.error('Connection failed. Please check your connection details.');
+    }
+  })
+  .catch((error) => console.error('Error:', error.message));
 ```
 
-As soon as I have more features, I will start editing this readme.
-greetings, Lysec <3
+Currently working commands:
+
+
+```js
+// Checks if the credentials are correct
+PalRCONClient.checkConnection(instance)
+
+// Sends RCON Command (maybe I didn't add a new one yet or something)
+PalRCONClient.Send(instance, 'RCON_COMMAND')
+
+// Displays all current players on the server
+PalRCONClient.ShowPlayers(instance)
+
+// Sends a text to the server
+PalRCONClient.Broadcast(instance)
+
+// Saves the server
+PalRCONClient.Save(instance)
+
+// Turns the server offline with specified time and text
+PalRCONClient.ShutDown(instance, "seconds", "text")
+
+// Kicks a player (steamId)
+PalRCONClient.Kick(instance, "steamId")
+
+// Bans a player (steamId)
+PalRCONClient.Ban(instance, "steamId")
+```
+
+
+## Support
+
+Please open up an issue if you find any bugs!
